@@ -1,17 +1,23 @@
 {
   stdenv,
   lib,
+  SDL2,
+  SDL2_ttf,
+  pkg-config,
+  dejavu_fonts,
 }:
 stdenv.mkDerivation {
   name = "starfield95";
   src = ./.;
-  dontUnpack = true;
-  buildPhase = lib.optionalString stdenv.hostPlatform.isDarwin ''
-    runHook preBuild
-    ${lib.getExe stdenv.cc.cc} -o starfield95 $src/starfield95.c -O2 \
-      -framework OpenGL \
-      -framework GLUT
-    runHook postBuild
+  buildInputs = [
+    SDL2
+    SDL2_ttf
+    pkg-config
+    dejavu_fonts
+  ];
+  preBuild = ''
+    substituteInPlace starfield95.c \
+      --replace "@fontPath@" "${dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf"
   '';
   installPhase = ''
     runHook preInstall

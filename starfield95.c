@@ -1,9 +1,5 @@
-#ifdef __APPLE__
-    #include <GLUT/glut.h>
-#else
-    #include <GL/glut.h>
-#endif
-
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
@@ -45,7 +41,18 @@
  */
 #define NEAR_THRESHOLD 0.3f
 
-/* Star data */
+/* SDL2 context handles */
+SDL_Window* gWindow = NULL;
+SDL_Renderer* gRenderer = NULL;
+TTF_Font* gFont = NULL;
+
+/* 
+ * Define the base speed and speed range for stars.
+ * Adjust these values to change the speed of the stars.
+ */
+#define BASE_SPEED 0.001f
+#define SPEED_RANGE 0.009f
+
 typedef struct {
     float x, y, z;    /* 3D position in [-1..1] for x,y, and (0..1] for z */
     float oldX, oldY; /* Last frame's 2D screen position in pixels */
@@ -62,11 +69,10 @@ static int gHeight = WINDOW_HEIGHT;
 /* Globals for FPS calculation */
 static float gFPS    = 0.0f;
 static int   gFrames = 0;
-static int   gLastTime = 0;
+static Uint32 gLastTime = 0;
 
-/* Store the OpenGL vendor & renderer strings */
-static const char *gVendorStr   = NULL;
-static const char *gRendererStr = NULL;
+/* Store the renderer info */
+static SDL_RendererInfo gRendererInfo;
 
 /* Return a random float in [0,1]. */
 static float randFloat() {
@@ -101,7 +107,7 @@ static void initStar(int i) {
     stars[i].z = z;
 
     /* Speeds in [0.002..0.02], adjust as you like. */
-    stars[i].speed = 0.002f + 0.018f * randFloat();
+    stars[i].speed = BASE_SPEED + SPEED_RANGE * randFloat();
 
     /* 
      * Immediately compute the star's new screen position
@@ -149,15 +155,20 @@ static void updateStars() {
 }
 
 /* 
- * Simple function to draw a string in 2D at (x, y).
- * Uses a GLUT bitmap font for simplicity.
+ * Draw text using SDL_ttf at position (x, y).
  */
-static void drawBitmapString(float x, float y, const char *string)
-{
-    glRasterPos2f(x, y);
-    while (*string) {
-        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *string);
-        ++string;
+static void drawText(const char* text, int x, int y, SDL_Color color) {
+    if (!gFont) return;
+    
+    SDL_Surface* surface = TTF_RenderText_Solid(gFont, text, color);
+    if (surface) {
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(gRenderer, surface);
+        if (texture) {
+            SDL_Rect dstRect = {x, y, surface->w, surface->h};
+            SDL_RenderCopy(gRenderer, texture, NULL, &dstRect);
+            SDL_DestroyTexture(texture);
+        }
+        SDL_FreeSurface(surface);
     }
 }
 
@@ -165,106 +176,59 @@ static void drawBitmapString(float x, float y, const char *string)
  * Draw the starfield:
  *  - "Far" stars (z >= NEAR_THRESHOLD) as points
  *  - "Near" stars (z < NEAR_THRESHOLD) as short lines from old -> new
- * Then draw the green FPS counter and vendor/renderer strings.
+ * Then draw the FPS counter and renderer info.
  */
-static void display() {
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
+static void render() {
+    /* Clear screen to black */
+    SDL_SetRenderDrawColor(gRenderer, 0, 0, 0, 255);
+    SDL_RenderClear(gRenderer);
 
-    /* 1. Draw FAR STARS as points. */
-    glColor3f(1.0f, 1.0f, 1.0f);
-    glPointSize(2.0f);
-    glBegin(GL_POINTS);
+    /* Set draw color to white for stars */
+    SDL_SetRenderDrawColor(gRenderer, 255, 255, 255, 255);
+
+    /* 1. Draw FAR STARS as points */
     for (int i = 0; i < STAR_COUNT; i++) {
         if (stars[i].z >= NEAR_THRESHOLD) {
             float factor = PERSPECTIVE_SCALE / stars[i].z;
-            float x = (gWidth  / 2.0f) + (stars[i].x * factor);
-            float y = (gHeight / 2.0f) + (stars[i].y * factor);
-            glVertex2f(x, y);
+            int x = (int)((gWidth  / 2.0f) + (stars[i].x * factor));
+            int y = (int)((gHeight / 2.0f) + (stars[i].y * factor));
+            SDL_RenderDrawPoint(gRenderer, x, y);
         }
     }
-    glEnd();
 
-    /* 2. Draw NEAR STARS as short lines (trails). */
-    glBegin(GL_LINES);
+    /* 2. Draw NEAR STARS as short lines (trails) */
     for (int i = 0; i < STAR_COUNT; i++) {
         if (stars[i].z < NEAR_THRESHOLD) {
             float factor = PERSPECTIVE_SCALE / stars[i].z;
-            float newX = (gWidth  / 2.0f) + (stars[i].x * factor);
-            float newY = (gHeight / 2.0f) + (stars[i].y * factor);
+            int newX = (int)((gWidth  / 2.0f) + (stars[i].x * factor));
+            int newY = (int)((gHeight / 2.0f) + (stars[i].y * factor));
 
-            glVertex2f(stars[i].oldX, stars[i].oldY);
-            glVertex2f(newX, newY);
+            SDL_RenderDrawLine(gRenderer, 
+                (int)stars[i].oldX, (int)stars[i].oldY,
+                newX, newY);
         }
     }
-    glEnd();
 
-    /* 3. Draw the green FPS counter and provider info near the bottom-left. */
-    glColor3f(0.0f, 1.0f, 0.0f);
-
+    /* 3. Draw the FPS counter and renderer info */
+    SDL_Color green = {0, 255, 0, 255};
     char buf[64];
     sprintf(buf, "FPS: %.2f", gFPS);
-    /* 
-     * Because y=0 is the top in this coordinate system (gluOrtho2D(0, w, h, 0)),
-     * a larger y-value is lower on the screen. So use gHeight - offset.
-     */
-    drawBitmapString(10.0f, gHeight - 10.0f, buf);
+    drawText(buf, 10, gHeight - 30, green);
+    
+    /* Print renderer name */
+    drawText(gRendererInfo.name, 10, gHeight - 60, green);
 
-    /* Print out vendor and renderer strings below the FPS counter. */
-    if (gVendorStr) {
-        drawBitmapString(10.0f, gHeight - 30.0f, gVendorStr);
-    }
-    if (gRendererStr) {
-        drawBitmapString(10.0f, gHeight - 50.0f, gRendererStr);
-    }
-
-    glutSwapBuffers();
+    SDL_RenderPresent(gRenderer);
 }
 
 /*
- * GLUT idle callback: keep the animation going.
- * Also measure FPS once per second.
+ * Handle window resize event
  */
-static void idle() {
-    updateStars();
-
-    /* Measure FPS */
-    int currentTime = glutGet(GLUT_ELAPSED_TIME); /* in milliseconds */
-    gFrames++;
-    if (currentTime - gLastTime >= 1000) {
-        /* Compute frames per second over the last ~1 second */
-        gFPS = (gFrames * 1000.0f) / (float)(currentTime - gLastTime);
-        gLastTime = currentTime;
-        gFrames = 0;
-    }
-
-    glutPostRedisplay();
-}
-
-/*
- * On window resize, update the viewport and projection.
- * Also re-sync the oldX/oldY for each star to avoid "jumping" lines.
- */
-static void reshape(int width, int height) {
+static void handleResize(int width, int height) {
     if (height == 0) height = 1;
 
-    gWidth  = width;
+    gWidth = width;
     gHeight = height;
-
-    glViewport(0, 0, width, height);
-
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    /* 
-     * With gluOrtho2D(0, width, height, 0), 
-     *  (0,0) is the top-left corner, 
-     *  (width, height) is the bottom-right corner.
-     */
-    gluOrtho2D(0.0, (GLdouble)width, (GLdouble)height, 0.0);
-
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
 
     /*
      * Re-sync the 'oldX/oldY' for each star to its 
@@ -272,50 +236,118 @@ static void reshape(int width, int height) {
      */
     for (int i = 0; i < STAR_COUNT; i++) {
         float factor = PERSPECTIVE_SCALE / stars[i].z;
-        float newX   = (gWidth  / 2.0f) + (stars[i].x * factor);
-        float newY   = (gHeight / 2.0f) + (stars[i].y * factor);
+        float newX = (gWidth  / 2.0f) + (stars[i].x * factor);
+        float newY = (gHeight / 2.0f) + (stars[i].y * factor);
         stars[i].oldX = newX;
         stars[i].oldY = newY;
     }
 }
 
-/*
- * Keyboard callback: ESC quits.
- */
-static void handleKeypress(unsigned char key, int x, int y) {
-    if (key == 27) {
-        exit(0);
-    }
-}
-
 int main(int argc, char** argv) {
-    /* Seed RNG for star init */
+    /* Initialize SDL */
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
+        return 1;
+    }
+
+    /* Initialize SDL_ttf */
+    if (TTF_Init() < 0) {
+        printf("SDL_ttf could not initialize! TTF_Error: %s\n", TTF_GetError());
+        SDL_Quit();
+        return 1;
+    }
+
+    /* Create window */
+    gWindow = SDL_CreateWindow("Starfield95",
+        SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+        WINDOW_WIDTH, WINDOW_HEIGHT,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    
+    if (!gWindow) {
+        printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
+        TTF_Quit();
+        SDL_Quit();
+        return 1;
+    }
+
+    /* Create renderer */
+    gRenderer = SDL_CreateRenderer(gWindow, -1, 
+        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    
+    if (!gRenderer) {
+        printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
+        SDL_DestroyWindow(gWindow);
+        TTF_Quit();
+        SDL_Quit();
+        return 1;
+    }
+
+    /* Get renderer info */
+    SDL_GetRendererInfo(gRenderer, &gRendererInfo);
+
+    /* Load font */
+    gFont = TTF_OpenFont("@fontPath@", 18);
+    if (!gFont) {
+        printf("Failed to load font! TTF_Error: %s\n", TTF_GetError());
+        /* Continue without font, text won't be rendered */
+    }
+
+    /* Seed RNG and init stars */
     srand((unsigned)time(NULL));
     initStars();
 
-    glutInit(&argc, argv);
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
-    glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
-    glutInitWindowPosition(100, 100);
-    glutCreateWindow("Starfield95");
+    /* Initialize the time marker for FPS */
+    gLastTime = SDL_GetTicks();
 
-    /* 
-     * Query and store the OpenGL driver/vendor info 
-     * (e.g., "Mesa/X.org", "NVIDIA", etc.).
-     */
-    gVendorStr   = (const char*) glGetString(GL_VENDOR);
-    gRendererStr = (const char*) glGetString(GL_RENDERER);
+    /* Main loop flag */
+    int quit = 0;
 
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    /* Event handler */
+    SDL_Event e;
 
-    glutDisplayFunc(display);
-    glutReshapeFunc(reshape);
-    glutIdleFunc(idle);
-    glutKeyboardFunc(handleKeypress);
+    /* Main loop */
+    while (!quit) {
+        /* Handle events */
+        while (SDL_PollEvent(&e) != 0) {
+            switch (e.type) {
+                case SDL_QUIT:
+                    quit = 1;
+                    break;
+                case SDL_WINDOWEVENT:
+                    if (e.window.event == SDL_WINDOWEVENT_RESIZED) {
+                        handleResize(e.window.data1, e.window.data2);
+                    }
+                    break;
+                case SDL_KEYDOWN:
+                    if (e.key.keysym.sym == SDLK_ESCAPE) {
+                        quit = 1;
+                    }
+                    break;
+            }
+        }
 
-    /* Initialize the time marker for FPS. */
-    gLastTime = glutGet(GLUT_ELAPSED_TIME);
+        /* Update stars */
+        updateStars();
 
-    glutMainLoop();
+        /* Calculate FPS */
+        Uint32 currentTime = SDL_GetTicks();
+        gFrames++;
+        if (currentTime - gLastTime >= 1000) {
+            gFPS = (gFrames * 1000.0f) / (float)(currentTime - gLastTime);
+            gLastTime = currentTime;
+            gFrames = 0;
+        }
+
+        /* Render */
+        render();
+    }
+
+    /* Cleanup */
+    if (gFont) TTF_CloseFont(gFont);
+    SDL_DestroyRenderer(gRenderer);
+    SDL_DestroyWindow(gWindow);
+    TTF_Quit();
+    SDL_Quit();
+
     return 0;
 }
