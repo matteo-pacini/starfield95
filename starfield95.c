@@ -23,57 +23,49 @@
  */
 
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
 
+/* Nuklear implementation */
+#define NK_INCLUDE_FIXED_TYPES
+#define NK_INCLUDE_STANDARD_IO
+#define NK_INCLUDE_STANDARD_VARARGS
+#define NK_INCLUDE_DEFAULT_ALLOCATOR
+#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
+#define NK_INCLUDE_FONT_BAKING
+#define NK_INCLUDE_DEFAULT_FONT
+#define NK_IMPLEMENTATION
+#include "nuklear.h"
+#define NK_SDL_RENDERER_IMPLEMENTATION
+#include "nuklear_sdl_renderer.h"
+
 /* Window dimensions */
 #define WINDOW_WIDTH  1280
 #define WINDOW_HEIGHT 720
 
-/* How many stars to draw */
-#define STAR_COUNT 500
+/* Star count control */
+static int starCount = 500;
+static float starSlider = 0.1f;  /* 0.1 = 500 stars, 1.0 = 5000 stars */
 
-/* 
- * We'll reset (re-init) a star if it gets too close
- * to the viewer, i.e. z < MIN_Z.
- */
+/* Reset a star if it gets too close to the viewer */
 #define MIN_Z 0.05f
 
-/* 
- * We avoid placing a star within this radius
- * of the origin in the (x,y) plane on reinit,
- * to reduce the chance of "big rays" from near (0,0).
- */
+/* Avoid placing a star too close to the center to prevent big streaks */
 #define MIN_RADIUS 0.1f
 
-/*
- * For perspective, we do:
- *   screen_x = center_x + (x * (PERSPECTIVE_SCALE / z))
- * The bigger this is, the more dramatic the outward "explosion."
- */
+/* Perspective calculation for dramatic starfield effect */
 #define PERSPECTIVE_SCALE 150.0f
 
-/* 
- * If you only want the trail when it's very close, 
- * you can set a threshold, for example 0.3. 
- * If star.z < NEAR_THRESHOLD => draw line. 
- * Otherwise, just draw a point. 
- * (Optional feature, can set NEAR_THRESHOLD=999 if you want trails always.)
- */
+/* Draw trails for stars that are close enough */
 #define NEAR_THRESHOLD 0.3f
 
-/* SDL2 context handles */
 SDL_Window* gWindow = NULL;
 SDL_Renderer* gRenderer = NULL;
-TTF_Font* gFont = NULL;
 
-/* 
- * Define the base speed and speed range for stars.
- * Adjust these values to change the speed of the stars.
- */
+struct nk_context* ctx = NULL;
+
 #define BASE_SPEED 0.001f
 #define SPEED_RANGE 0.009f
 
@@ -83,32 +75,55 @@ typedef struct {
     float speed;      /* Speed at which z decreases */
 } Star;
 
-/* Global array of stars */
-static Star stars[STAR_COUNT];
-
-/* Track current window size so we can recenter stars after resize. */
 static int gWidth  = WINDOW_WIDTH;
 static int gHeight = WINDOW_HEIGHT;
 
-/* Globals for FPS calculation */
 static float gFPS    = 0.0f;
 static int   gFrames = 0;
 static Uint32 gLastTime = 0;
 
-/* Store the renderer info */
 static SDL_RendererInfo gRendererInfo;
 
-/* Return a random float in [0,1]. */
 static float randFloat() {
     return (float)rand() / (float)RAND_MAX;
 }
 
-/*
- * Initialize (or reinitialize) one star at a random position
- * that is at least MIN_RADIUS away from the origin in x,y.
- * Then set the star's old screen position = new screen position
- * so no immediate "big line" is drawn on first frame.
- */
+static Star* stars = NULL;
+
+static int allocateStars(int count) {
+    Star* newStars = (Star*)realloc(stars, count * sizeof(Star));
+    if (!newStars) {
+        return 0;
+    }
+    
+    /* Initialize new stars if array grew */
+    if (count > starCount) {
+        for (int i = starCount; i < count; i++) {
+            float r2 = 0.0f;
+            float z = 0.1f + 0.9f * randFloat();
+            float x, y;
+            do {
+                x = 2.0f * (randFloat() - 0.5f);
+                y = 2.0f * (randFloat() - 0.5f);
+                r2 = x*x + y*y;
+            } while (r2 < (MIN_RADIUS * MIN_RADIUS));
+
+            newStars[i].x = x;
+            newStars[i].y = y;
+            newStars[i].z = z;
+            newStars[i].speed = BASE_SPEED + SPEED_RANGE * randFloat();
+
+            float factor = PERSPECTIVE_SCALE / z;
+            newStars[i].oldX = (gWidth  / 2.0f) + (x * factor);
+            newStars[i].oldY = (gHeight / 2.0f) + (y * factor);
+        }
+    }
+    
+    stars = newStars;
+    starCount = count;
+    return 1;
+}
+
 static void initStar(int i) {
     float r2 = 0.0f;
 
@@ -148,21 +163,18 @@ static void initStar(int i) {
     }
 }
 
-/* Initialize all stars once at program start. */
-static void initStars() {
-    for (int i = 0; i < STAR_COUNT; i++) {
+static int initStars() {
+    if (!allocateStars(starCount)) {
+        return 0;
+    }
+    for (int i = 0; i < starCount; i++) {
         initStar(i);
     }
+    return 1;
 }
 
-/*
- * Update each star per frame:
- *  1) Record the star's current screen position as oldX/oldY.
- *  2) Move the star closer by subtracting 'speed' from z.
- *  3) If z < MIN_Z, re-initialize the star.
- */
 static void updateStars() {
-    for (int i = 0; i < STAR_COUNT; i++) {
+    for (int i = 0; i < starCount; i++) {
         /* 1) Store old projected position. */
         float factorOld = PERSPECTIVE_SCALE / stars[i].z;
         stars[i].oldX = (gWidth  / 2.0f) + (stars[i].x * factorOld);
@@ -178,30 +190,6 @@ static void updateStars() {
     }
 }
 
-/* 
- * Draw text using SDL_ttf at position (x, y).
- */
-static void drawText(const char* text, int x, int y, SDL_Color color) {
-    if (!gFont) return;
-    
-    SDL_Surface* surface = TTF_RenderText_Solid(gFont, text, color);
-    if (surface) {
-        SDL_Texture* texture = SDL_CreateTextureFromSurface(gRenderer, surface);
-        if (texture) {
-            SDL_Rect dstRect = {x, y, surface->w, surface->h};
-            SDL_RenderCopy(gRenderer, texture, NULL, &dstRect);
-            SDL_DestroyTexture(texture);
-        }
-        SDL_FreeSurface(surface);
-    }
-}
-
-/*
- * Draw the starfield:
- *  - "Far" stars (z >= NEAR_THRESHOLD) as points
- *  - "Near" stars (z < NEAR_THRESHOLD) as short lines from old -> new
- * Then draw the FPS counter and renderer info.
- */
 static void render() {
     /* Clear screen to black */
     SDL_SetRenderDrawColor(gRenderer, 0, 0, 0, 255);
@@ -211,7 +199,7 @@ static void render() {
     SDL_SetRenderDrawColor(gRenderer, 255, 255, 255, 255);
 
     /* 1. Draw FAR STARS as points */
-    for (int i = 0; i < STAR_COUNT; i++) {
+    for (int i = 0; i < starCount; i++) {
         if (stars[i].z >= NEAR_THRESHOLD) {
             float factor = PERSPECTIVE_SCALE / stars[i].z;
             int x = (int)((gWidth  / 2.0f) + (stars[i].x * factor));
@@ -221,7 +209,7 @@ static void render() {
     }
 
     /* 2. Draw NEAR STARS as short lines (trails) */
-    for (int i = 0; i < STAR_COUNT; i++) {
+    for (int i = 0; i < starCount; i++) {
         if (stars[i].z < NEAR_THRESHOLD) {
             float factor = PERSPECTIVE_SCALE / stars[i].z;
             int newX = (int)((gWidth  / 2.0f) + (stars[i].x * factor));
@@ -233,21 +221,56 @@ static void render() {
         }
     }
 
-    /* 3. Draw the FPS counter and renderer info */
-    SDL_Color green = {0, 255, 0, 255};
-    char buf[64];
-    sprintf(buf, "FPS: %.2f", gFPS);
-    drawText(buf, 10, gHeight - 30, green);
+    /* 3. Draw the UI windows using Nuklear */
+    struct nk_style *style = &ctx->style;
+    struct nk_color bg = nk_rgba(0, 0, 0, 200);
+    style->window.background = nk_rgba(0, 0, 0, 200);
+    style->window.fixed_background = nk_style_item_color(bg);
+    style->window.padding = nk_vec2(8, 8);
+    style->window.border = 1.0f;
+    style->window.border_color = nk_rgb(0, 255, 0);
     
-    /* Print renderer name */
-    drawText(gRendererInfo.name, 10, gHeight - 60, green);
+    /* Info window (bottom left) */
+    if (nk_begin(ctx, "Info", nk_rect(10, gHeight - 75, 180, 60),
+        NK_WINDOW_NO_SCROLLBAR|NK_WINDOW_NO_INPUT|NK_WINDOW_BORDER)) {
+        
+        char buf[64];
+        sprintf(buf, "FPS: %.2f", gFPS);
+        
+        nk_layout_row_dynamic(ctx, 20, 1);
+        nk_label_colored(ctx, gRendererInfo.name, NK_TEXT_LEFT, nk_rgb(0, 255, 0));
+        nk_label_colored(ctx, buf, NK_TEXT_LEFT, nk_rgb(0, 255, 0));
+    }
+    nk_end(ctx);
 
+    /* Settings window (bottom right) */
+    if (nk_begin(ctx, "Settings", nk_rect(gWidth - 220, gHeight - 75, 200, 60),
+        NK_WINDOW_NO_SCROLLBAR)) {
+        
+        nk_layout_row_dynamic(ctx, 25, 1);
+        
+        char buf[32];
+        sprintf(buf, "Stars: %d", starCount);
+        nk_label_colored(ctx, buf, NK_TEXT_LEFT, nk_rgb(0, 255, 0));
+        
+        float oldValue = starSlider;
+        nk_slider_float(ctx, 0, &starSlider, 1.0f, 0.01f);
+        
+        if (oldValue != starSlider) {
+            int newCount = (int)(starSlider * 5000.0f);
+            if (newCount < 1) newCount = 1;  /* Ensure at least 1 star */
+            allocateStars(newCount);
+        }
+    }
+    nk_end(ctx);
+
+    /* Render Nuklear */
+    nk_sdl_render(NK_ANTI_ALIASING_ON);
+
+    /* Present the final frame */
     SDL_RenderPresent(gRenderer);
 }
 
-/*
- * Handle window resize event
- */
 static void handleResize(int width, int height) {
     if (height == 0) height = 1;
 
@@ -258,7 +281,7 @@ static void handleResize(int width, int height) {
      * Re-sync the 'oldX/oldY' for each star to its 
      * "current" position in the *new* window size.
      */
-    for (int i = 0; i < STAR_COUNT; i++) {
+    for (int i = 0; i < starCount; i++) {
         float factor = PERSPECTIVE_SCALE / stars[i].z;
         float newX = (gWidth  / 2.0f) + (stars[i].x * factor);
         float newY = (gHeight / 2.0f) + (stars[i].y * factor);
@@ -274,13 +297,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    /* Initialize SDL_ttf */
-    if (TTF_Init() < 0) {
-        printf("SDL_ttf could not initialize! TTF_Error: %s\n", TTF_GetError());
-        SDL_Quit();
-        return 1;
-    }
-
     /* Create window */
     gWindow = SDL_CreateWindow("Starfield95",
         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
@@ -289,7 +305,6 @@ int main(int argc, char** argv) {
     
     if (!gWindow) {
         printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
-        TTF_Quit();
         SDL_Quit();
         return 1;
     }
@@ -301,7 +316,6 @@ int main(int argc, char** argv) {
     if (!gRenderer) {
         printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
         SDL_DestroyWindow(gWindow);
-        TTF_Quit();
         SDL_Quit();
         return 1;
     }
@@ -309,16 +323,31 @@ int main(int argc, char** argv) {
     /* Get renderer info */
     SDL_GetRendererInfo(gRenderer, &gRendererInfo);
 
-    /* Load font */
-    gFont = TTF_OpenFont("@fontPath@", 18);
-    if (!gFont) {
-        printf("Failed to load font! TTF_Error: %s\n", TTF_GetError());
-        /* Continue without font, text won't be rendered */
+    /* Initialize Nuklear */
+    ctx = nk_sdl_init(gWindow, gRenderer);
+    if (!ctx) {
+        printf("Could not initialize Nuklear!\n");
+        SDL_DestroyRenderer(gRenderer);
+        SDL_DestroyWindow(gWindow);
+        SDL_Quit();
+        return 1;
     }
+
+    /* Load Nuklear's default font */
+    struct nk_font_atlas *atlas;
+    nk_sdl_font_stash_begin(&atlas);
+    nk_sdl_font_stash_end();
 
     /* Seed RNG and init stars */
     srand((unsigned)time(NULL));
-    initStars();
+    if (!initStars()) {
+        printf("Could not allocate stars!\n");
+        nk_sdl_shutdown();
+        SDL_DestroyRenderer(gRenderer);
+        SDL_DestroyWindow(gWindow);
+        SDL_Quit();
+        return 1;
+    }
 
     /* Initialize the time marker for FPS */
     gLastTime = SDL_GetTicks();
@@ -332,23 +361,22 @@ int main(int argc, char** argv) {
     /* Main loop */
     while (!quit) {
         /* Handle events */
+        nk_input_begin(ctx);
         while (SDL_PollEvent(&e) != 0) {
-            switch (e.type) {
-                case SDL_QUIT:
+            if (e.type == SDL_QUIT) {
+                quit = 1;
+            } else if (e.type == SDL_WINDOWEVENT) {
+                if (e.window.event == SDL_WINDOWEVENT_RESIZED) {
+                    handleResize(e.window.data1, e.window.data2);
+                }
+            } else if (e.type == SDL_KEYDOWN) {
+                if (e.key.keysym.sym == SDLK_ESCAPE) {
                     quit = 1;
-                    break;
-                case SDL_WINDOWEVENT:
-                    if (e.window.event == SDL_WINDOWEVENT_RESIZED) {
-                        handleResize(e.window.data1, e.window.data2);
-                    }
-                    break;
-                case SDL_KEYDOWN:
-                    if (e.key.keysym.sym == SDLK_ESCAPE) {
-                        quit = 1;
-                    }
-                    break;
+                }
             }
+            nk_sdl_handle_event(&e);
         }
+        nk_input_end(ctx);
 
         /* Update stars */
         updateStars();
@@ -367,10 +395,13 @@ int main(int argc, char** argv) {
     }
 
     /* Cleanup */
-    if (gFont) TTF_CloseFont(gFont);
+    if (stars) {
+        free(stars);
+        stars = NULL;
+    }
+    nk_sdl_shutdown();
     SDL_DestroyRenderer(gRenderer);
     SDL_DestroyWindow(gWindow);
-    TTF_Quit();
     SDL_Quit();
 
     return 0;

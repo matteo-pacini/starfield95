@@ -1,5 +1,5 @@
-CFLAGS = -O2 $(shell pkg-config --cflags sdl2 SDL2_ttf)
-LDFLAGS = $(shell pkg-config --libs sdl2 SDL2_ttf)
+CFLAGS = -O2 $(shell pkg-config --cflags sdl2)
+LDFLAGS = $(shell pkg-config --libs sdl2) -lm
 
 starfield95: starfield95.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
