@@ -45,9 +45,10 @@
 #define WINDOW_WIDTH  1280
 #define WINDOW_HEIGHT 720
 
-/* Star count control */
+/* Star count and speed control */
 static int starCount = 500;
 static float starSlider = 0.1f;  /* 0.1 = 500 stars, 1.0 = 5000 stars */
+static float speedSlider = 0.5f;  /* Controls star movement speed: 0=stop, 0.5=normal, 1.0=2x */
 
 /* Reset a star if it gets too close to the viewer */
 #define MIN_Z 0.05f
@@ -111,7 +112,7 @@ static int allocateStars(int count) {
             newStars[i].x = x;
             newStars[i].y = y;
             newStars[i].z = z;
-            newStars[i].speed = BASE_SPEED + SPEED_RANGE * randFloat();
+            newStars[i].speed = (BASE_SPEED + SPEED_RANGE * randFloat()) * (speedSlider * 2.0f);
 
             float factor = PERSPECTIVE_SCALE / z;
             newStars[i].oldX = (gWidth  / 2.0f) + (x * factor);
@@ -145,8 +146,8 @@ static void initStar(int i) {
     stars[i].y = y;
     stars[i].z = z;
 
-    /* Speeds in [0.002..0.02], adjust as you like. */
-    stars[i].speed = BASE_SPEED + SPEED_RANGE * randFloat();
+    /* Speed controlled by slider: 0=stop, 0.5=normal, 1.0=2x */
+    stars[i].speed = (BASE_SPEED + SPEED_RANGE * randFloat()) * (speedSlider * 2.0f);
 
     /* 
      * Immediately compute the star's new screen position
@@ -227,12 +228,10 @@ static void render() {
     style->window.background = nk_rgba(0, 0, 0, 200);
     style->window.fixed_background = nk_style_item_color(bg);
     style->window.padding = nk_vec2(8, 8);
-    style->window.border = 1.0f;
-    style->window.border_color = nk_rgb(0, 255, 0);
     
     /* Info window (bottom left) */
     if (nk_begin(ctx, "Info", nk_rect(10, gHeight - 75, 180, 60),
-        NK_WINDOW_NO_SCROLLBAR|NK_WINDOW_NO_INPUT|NK_WINDOW_BORDER)) {
+        NK_WINDOW_NO_SCROLLBAR|NK_WINDOW_NO_INPUT)) {
         
         char buf[64];
         sprintf(buf, "FPS: %.2f", gFPS);
@@ -244,22 +243,36 @@ static void render() {
     nk_end(ctx);
 
     /* Settings window (bottom right) */
-    if (nk_begin(ctx, "Settings", nk_rect(gWidth - 220, gHeight - 75, 200, 60),
+    if (nk_begin(ctx, "Settings", nk_rect(gWidth - 220, gHeight - 110, 200, 105),
         NK_WINDOW_NO_SCROLLBAR)) {
         
-        nk_layout_row_dynamic(ctx, 25, 1);
+        nk_layout_row_dynamic(ctx, 20, 1);
         
         char buf[32];
         sprintf(buf, "Stars: %d", starCount);
         nk_label_colored(ctx, buf, NK_TEXT_LEFT, nk_rgb(0, 255, 0));
         
-        float oldValue = starSlider;
+        float oldStarValue = starSlider;
+        float oldSpeedValue = speedSlider;
+        
         nk_slider_float(ctx, 0, &starSlider, 1.0f, 0.01f);
         
-        if (oldValue != starSlider) {
+        nk_label_colored(ctx, "Speed:", NK_TEXT_LEFT, nk_rgb(0, 255, 0));
+        nk_slider_float(ctx, 0, &speedSlider, 1.0f, 0.01f);
+        
+        /* Handle star count changes */
+        if (oldStarValue != starSlider) {
             int newCount = (int)(starSlider * 5000.0f);
             if (newCount < 1) newCount = 1;  /* Ensure at least 1 star */
             allocateStars(newCount);
+        }
+        
+        /* Handle speed changes */
+        if (oldSpeedValue != speedSlider) {
+            /* Update all existing stars with new speed */
+            for (int i = 0; i < starCount; i++) {
+                stars[i].speed = (BASE_SPEED + SPEED_RANGE * randFloat()) * (speedSlider * 2.0f);
+            }
         }
     }
     nk_end(ctx);
