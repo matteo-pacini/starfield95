@@ -28,7 +28,6 @@ nix run path:.
 
 The following dependencies are required:
 - SDL2
-- SDL2_ttf
 - pkg-config
 - GCC (default) or Clang compiler
 
@@ -36,25 +35,25 @@ The following dependencies are required:
 ```bash
 # Install dependencies
 sudo apt update
-sudo apt install build-essential pkg-config libsdl2-dev libsdl2-ttf-dev
+sudo apt install build-essential pkg-config libsdl2-dev
 ```
 
 ### macOS
 ```bash
 # Using Homebrew
-brew install sdl2 sdl2_ttf pkg-config
+brew install sdl2 pkg-config
 ```
 
 ### Fedora
 ```bash
 # Install dependencies
-sudo dnf install gcc make pkgconfig SDL2-devel SDL2_ttf-devel
+sudo dnf install gcc make pkgconfig SDL2-devel
 ```
 
 ### Arch Linux
 ```bash
 # Install dependencies
-sudo pacman -S base-devel pkgconf sdl2 sdl2_ttf
+sudo pacman -S base-devel pkgconf sdl2
 ```
 
 ### Building the Project
@@ -75,11 +74,11 @@ sudo pacman -S base-devel pkgconf sdl2 sdl2_ttf
 
 ### Troubleshooting
 
-1. **SDL2 libraries not found**:
+1. **SDL2 library not found**:
    - Ensure development packages are installed
-   - Ubuntu/Debian: Check for `libsdl2-dev` and `libsdl2-ttf-dev`
-   - Fedora: Check for `SDL2-devel` and `SDL2_ttf-devel`
-   - Arch: Verify `sdl2` and `sdl2_ttf` are installed
+   - Ubuntu/Debian: Check for `libsdl2-dev`
+   - Fedora: Check for `SDL2-devel`
+   - Arch: Verify `sdl2` is installed
 
 2. **Compilation errors**:
    - Make sure all development tools are installed
