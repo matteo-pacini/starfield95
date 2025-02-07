@@ -45,8 +45,8 @@
 #define WINDOW_HEIGHT 720
 
 /* Star count and speed control */
-static int starCount = 500;
-static float starSlider = 0.1f;  /* 0.1 = 500 stars, 1.0 = 5000 stars */
+static int starCount = 10000;
+static float starSlider = 0.02f;  /* 0.02 = 10000 stars, 1.0 = 500000 stars */
 static float speedSlider = 0.5f;  /* Controls star movement speed: 0=stop, 0.5=normal, 1.0=2x */
 
 /* Reset a star if it gets too close to the viewer */
@@ -242,7 +242,7 @@ static void render() {
     nk_end(ctx);
 
     /* Settings window (bottom right) */
-    if (nk_begin(ctx, "Settings", nk_rect(gWidth - 220, gHeight - 110, 200, 105),
+    if (nk_begin(ctx, "Settings", nk_rect(gWidth - 320, gHeight - 110, 300, 105),
         NK_WINDOW_NO_SCROLLBAR)) {
         
         nk_layout_row_dynamic(ctx, 20, 1);
@@ -256,12 +256,14 @@ static void render() {
         
         nk_slider_float(ctx, 0, &starSlider, 1.0f, 0.01f);
         
-        nk_label_colored(ctx, "Speed:", NK_TEXT_LEFT, nk_rgb(0, 255, 0));
+        char speedBuf[32];
+        sprintf(speedBuf, "Speed: %.2fx", speedSlider * 2.0f);
+        nk_label_colored(ctx, speedBuf, NK_TEXT_LEFT, nk_rgb(0, 255, 0));
         nk_slider_float(ctx, 0, &speedSlider, 1.0f, 0.01f);
         
         /* Handle star count changes */
         if (oldStarValue != starSlider) {
-            int newCount = (int)(starSlider * 5000.0f);
+            int newCount = (int)(starSlider * 500000.0f);
             if (newCount < 1) newCount = 1;  /* Ensure at least 1 star */
             allocateStars(newCount);
         }
