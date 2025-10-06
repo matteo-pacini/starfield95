@@ -1,0 +1,42 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: x86_64-linux
+            os: ubuntu-latest
+          - platform: aarch64-linux
+            os: ubuntu-latest
+          - platform: aarch64-darwin
+            os: macos-latest
+          - platform: x86_64-darwin
+            os: macos-latest
+          
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: nixbuild/nix-quick-install-action@v34
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+
+      - name: Build 
+        run: |
+          nix build path:.#static
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: starfield95-${{ matrix.platform }}-static
+          path: ./result/bin/starfield95
